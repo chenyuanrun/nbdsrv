@@ -6,6 +6,7 @@ pub const INIT_PASSWD: u64 = 0x4e42444d41474943;
 pub const CLISERV_MAGIC: u64 = 0x00420281861253;
 pub const IHAVEOPT: u64 = 0x49484156454F5054;
 pub const NBD_REQUEST_MAGIC: u32 = 0x25609513;
+pub const NBD_OPT_REPLY_MAGIC: u64 = 0x3e889045565a9;
 
 pub const NBD_NEWSTYLE_PORT: u16 = 10809;
 
@@ -66,13 +67,24 @@ pub enum NbdOpt {
 
 // Option reply types:
 // https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md#option-reply-types
-#[repr(u32)]
+#[repr(i32)]
 #[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive, PartialEq, Eq)]
 pub enum NbdOptReply {
     Ack = 1,
     Server = 2,
     Info = 3,
     MetaContext = 4,
+
+    ErrUnsup = -1,
+    ErrPolicy = -2,
+    ErrInvalid = -3,
+    ErrPlatform = -4,
+    ErrTlsReqd = -5,
+    ErrUnknown = -6,
+    ErrShutdown = -7,
+    ErrBlockSizeReqd = -8,
+    ErrTooBig = -9,
+    ErrExtHeaderReqd = -10,
 }
 
 // Rbd Info types.

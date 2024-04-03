@@ -10,13 +10,22 @@ use tokio::{
 use tracing::{debug, error, info};
 
 use crate::proto::{
-    NbdClientFlag, NbdCmd, NbdHandshakeFlag, NbdOpt, IHAVEOPT, INIT_PASSWD, NBD_REQUEST_MAGIC,
+    self, NbdClientFlag, NbdCmd, NbdHandshakeFlag, NbdOpt, NbdOptReply, IHAVEOPT, INIT_PASSWD,
+    NBD_REQUEST_MAGIC,
 };
 
 pub type IoResult<T> = std::io::Result<T>;
 
 // TODO
 const MAX_OPTION_DATA_LEN: usize = 4096;
+
+trait NbdWrite {
+    async fn nbd_write(&self, sock: &mut TcpStream) -> IoResult<()>;
+}
+
+trait NbdRead: Sized {
+    async fn nbd_read(sock: &mut TcpStream) -> IoResult<Self>;
+}
 
 pub struct ServerBuilder {
     port: u16,
@@ -128,7 +137,7 @@ impl ServerShard {
         // Transmission.
         loop {
             // Handle request.
-            let req = self.read_request(&mut sock).await?;
+            let req = Request::nbd_read(&mut sock).await?;
             let trans_end = self.handle_request(req, &mut sock).await?;
             if trans_end {
                 break;
@@ -147,7 +156,22 @@ impl ServerShard {
         unimplemented!()
     }
 
-    async fn read_request(&mut self, sock: &mut TcpStream) -> IoResult<Request> {
+    async fn handle_request(&mut self, req: Request, sock: &mut TcpStream) -> IoResult<bool> {
+        unimplemented!()
+    }
+}
+
+struct Request {
+    flags: u16,
+    cmd: NbdCmd,
+    cookie: u64,
+    offset: u64,
+    length: u32,
+    data: Vec<u8>,
+}
+
+impl NbdRead for Request {
+    async fn nbd_read(sock: &mut TcpStream) -> IoResult<Self> {
         let request_magic = sock.read_u32().await?;
         if request_magic != NBD_REQUEST_MAGIC {
             error!(?request_magic, "request magic mismatch");
@@ -180,17 +204,23 @@ impl ServerShard {
             data,
         })
     }
-
-    async fn handle_request(&mut self, req: Request, sock: &mut TcpStream) -> IoResult<bool> {
-        unimplemented!()
-    }
 }
 
-struct Request {
-    flags: u16,
-    cmd: NbdCmd,
-    cookie: u64,
-    offset: u64,
-    length: u32,
+struct OptReply {
+    option: NbdOpt,
+    reply: NbdOptReply,
     data: Vec<u8>,
+}
+
+impl NbdWrite for OptReply {
+    async fn nbd_write(&self, sock: &mut TcpStream) -> IoResult<()> {
+        sock.write_u64(proto::NBD_OPT_REPLY_MAGIC).await?;
+        sock.write_u32(self.option as u32).await?;
+        sock.write_i32(self.reply as i32).await?;
+        sock.write_u32(self.data.len().try_into().unwrap()).await?;
+        if self.data.len() != 0 {
+            sock.write_all(&self.data).await?;
+        }
+        Ok(())
+    }
 }
