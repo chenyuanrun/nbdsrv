@@ -1,12 +1,18 @@
+use num_derive::{FromPrimitive, ToPrimitive};
+
+pub const MAX_STR_LEN: usize = 256;
+
 pub const INIT_PASSWD: u64 = 0x4e42444d41474943;
 pub const CLISERV_MAGIC: u64 = 0x00420281861253;
 pub const IHAVEOPT: u64 = 0x49484156454F5054;
+pub const NBD_REQUEST_MAGIC: u32 = 0x25609513;
 
 pub const NBD_NEWSTYLE_PORT: u16 = 10809;
 
 bitflags::bitflags! {
     // Handshake flags:
     // https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md#handshake-flags
+    #[derive(Debug, Clone, Copy)]
     pub struct NbdHandshakeFlag: u16 {
         const FIXED_NEWSTYLE    = 0x0001;
         const NO_ZEROES         = 0x0002;
@@ -14,6 +20,7 @@ bitflags::bitflags! {
 
     // Client flags:
     // https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md#client-flags
+    #[derive(Debug, Clone, Copy)]
     pub struct NbdClientFlag: u32 {
         const FIXED_NEWSTYLE    = 0x0001;
         const NO_ZEROES         = 0x0002;
@@ -21,6 +28,7 @@ bitflags::bitflags! {
 
     // Transmission flags:
     // https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md#transmission-flags
+    #[derive(Debug, Clone, Copy)]
     pub struct NbdTransFlag: u16 {
         const HAS_FLAGS         = 0x0001;
         const READ_ONLY         = 0x0002;
@@ -41,6 +49,7 @@ bitflags::bitflags! {
 // Option types:
 // https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md#option-types
 #[repr(u32)]
+#[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive, PartialEq, Eq)]
 pub enum NbdOpt {
     ExportName = 1,
     Abort = 2,
@@ -58,6 +67,7 @@ pub enum NbdOpt {
 // Option reply types:
 // https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md#option-reply-types
 #[repr(u32)]
+#[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive, PartialEq, Eq)]
 pub enum NbdOptReply {
     Ack = 1,
     Server = 2,
@@ -67,8 +77,25 @@ pub enum NbdOptReply {
 
 // Rbd Info types.
 #[repr(u16)]
+#[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive, PartialEq, Eq)]
 pub enum NbdInfo {
     Name = 1,
     Description = 2,
     BlockSize = 3,
+}
+
+// Request types:
+// https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md#request-types
+#[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive, PartialEq, Eq)]
+#[repr(u16)]
+pub enum NbdCmd {
+    Read = 0,
+    Write = 1,
+    Disk = 2,
+    Flush = 3,
+    Trim = 4,
+    Cache = 5,
+    WriteZeroes = 6,
+    BlockStatus = 7,
+    Resize = 8,
 }
