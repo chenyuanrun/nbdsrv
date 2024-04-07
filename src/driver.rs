@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, ptr::addr_of_mut};
+use std::{cell::UnsafeCell, collections::HashMap, ops::Deref, ptr::addr_of_mut};
 
 use crate::{
     container_of, list_for_each_entry,
@@ -15,17 +15,44 @@ impl DriverRegistry {
         DriverRegistry {}
     }
 
-    pub fn get_driver(&self, name: &str) -> Option<()> {
-        unimplemented!()
+    pub fn get_driver(&self, name: &str, config: &HashMap<String, String>) -> Option<Driver> {
+        let mut driver = None;
+        unsafe {
+            pthread_mutex_lock(DRIVERS.get_lock());
+            list_for_each_entry!(DriverItem, DRIVERS.get_drivers(), list, |item| => {
+                if item.transmute().get_name() == name {
+                    driver = Some(Driver::from_impl(item.transmute().constructor.as_ref().unwrap()(config)));
+                    break;
+                }
+            });
+            pthread_mutex_unlock(DRIVERS.get_lock());
+        }
+        driver
     }
 }
 
-#[derive(Clone)]
-pub struct Driver {}
+pub struct Driver {
+    driver_impl: Box<dyn DriverImpl>,
+}
+
+impl Clone for Driver {
+    fn clone(&self) -> Self {
+        Driver {
+            driver_impl: self.driver_impl.dup(),
+        }
+    }
+}
 
 impl Driver {
-    pub fn name(&self) -> &str {
-        unimplemented!()
+    pub fn from_impl(driver_impl: Box<dyn DriverImpl>) -> Self {
+        Self { driver_impl }
+    }
+}
+
+impl Deref for Driver {
+    type Target = dyn DriverImpl;
+    fn deref(&self) -> &Self::Target {
+        self.driver_impl.as_ref()
     }
 }
 
@@ -33,11 +60,37 @@ impl Driver {
 pub trait DriverImpl: Send + Sync {
     fn name(&self) -> &str;
     fn dup(&self) -> Box<dyn DriverImpl>;
+
+    async fn open(&self, name: &str) -> std::io::Result<BlockDevice>;
+}
+
+pub struct BlockDevice {
+    blkdev_impl: Box<dyn BlockDeviceImpl>,
+}
+
+impl Clone for BlockDevice {
+    fn clone(&self) -> Self {
+        Self {
+            blkdev_impl: self.blkdev_impl.dup(),
+        }
+    }
+}
+
+impl Deref for BlockDevice {
+    type Target = dyn BlockDeviceImpl;
+    fn deref(&self) -> &Self::Target {
+        self.blkdev_impl.as_ref()
+    }
+}
+
+#[async_trait]
+pub trait BlockDeviceImpl: Send + Sync {
+    fn dup(&self) -> Box<dyn BlockDeviceImpl>;
 }
 
 pub struct FsDriver {}
 
-fn fs_driver_constructor() -> Box<dyn DriverImpl> {
+fn fs_driver_constructor(config: &HashMap<String, String>) -> Box<dyn DriverImpl> {
     unimplemented!()
 }
 
@@ -72,13 +125,19 @@ impl GlobalDrivers {
     }
 }
 
-type DriverConstructor = fn() -> Box<dyn DriverImpl>;
+type DriverConstructor = fn(&HashMap<String, String>) -> Box<dyn DriverImpl>;
 
 struct DriverItem {
     list: ListHead,
     name_len: usize,
     name: [u8; 64],
     constructor: Option<DriverConstructor>,
+}
+
+impl DriverItem {
+    fn get_name(&self) -> &str {
+        unsafe { std::str::from_utf8_unchecked(&self.name[..self.name_len]) }
+    }
 }
 
 static DRIVERS: GlobalDrivers = GlobalDrivers(UnsafeCell::new(GlobalDriversInner {
