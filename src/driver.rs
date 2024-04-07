@@ -15,6 +15,18 @@ impl DriverRegistry {
         DriverRegistry {}
     }
 
+    pub fn list_drivers(&self) -> Vec<String> {
+        let mut drivers = Vec::new();
+        unsafe {
+            pthread_mutex_lock(DRIVERS.get_lock());
+            list_for_each_entry!(DriverItem, DRIVERS.get_drivers(), list, |item| => {
+                drivers.push(item.transmute().get_name().to_string())
+            });
+            pthread_mutex_unlock(DRIVERS.get_lock());
+        }
+        drivers
+    }
+
     pub fn get_driver(&self, name: &str, config: &HashMap<String, String>) -> Option<Driver> {
         let mut driver = None;
         unsafe {
@@ -193,5 +205,26 @@ pub fn register_driver(name: &str, constructor: DriverConstructor) {
         }
 
         pthread_mutex_unlock(DRIVERS.get_lock());
+    }
+}
+
+// Tests
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_drivers() {
+        let registry = DriverRegistry::new();
+        let drivers = registry.list_drivers();
+
+        let mut fs_found = false;
+        for driver in drivers {
+            println!("found driver [{driver}]");
+            if &driver == "fs" {
+                fs_found = true;
+            }
+        }
+        assert!(fs_found);
     }
 }
