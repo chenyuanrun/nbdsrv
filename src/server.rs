@@ -1,6 +1,11 @@
 #![allow(dead_code)]
 
-use std::{io::ErrorKind, net::Ipv4Addr, sync::Arc};
+use std::{
+    collections::HashMap,
+    io::ErrorKind,
+    net::Ipv4Addr,
+    sync::{Arc, Mutex},
+};
 
 use num_traits::FromPrimitive;
 use tokio::{
@@ -9,9 +14,12 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
-use crate::proto::{
-    self, NbdClientFlag, NbdCmd, NbdHandshakeFlag, NbdOpt, NbdOptReply, IHAVEOPT, INIT_PASSWD,
-    NBD_REQUEST_MAGIC,
+use crate::{
+    driver::{Driver, ImageDesc},
+    proto::{
+        self, NbdClientFlag, NbdCmd, NbdHandshakeFlag, NbdOpt, NbdOptReply, IHAVEOPT, INIT_PASSWD,
+        NBD_REQUEST_MAGIC,
+    },
 };
 
 pub type IoResult<T> = std::io::Result<T>;
@@ -56,6 +64,7 @@ impl ServerBuilder {
                 port: self.port,
                 handshake_flags: self.handshake_flags,
             }),
+            state: Arc::new(Mutex::new(ServerState::default())),
         }
     }
 }
@@ -65,8 +74,31 @@ pub struct ServerConfig {
     handshake_flags: u16,
 }
 
+#[derive(Debug, Default)]
+struct ServerState {
+    default_driver: Option<Driver>,
+    images: HashMap<Driver, Vec<ImageDesc>>,
+}
+
+impl ServerState {
+    fn list_images(&self) -> Vec<(Driver, ImageDesc)> {
+        self.images
+            .iter()
+            .flat_map(|(k, v)| v.iter().map(|image| (k.clone(), image.clone())))
+            .collect()
+    }
+
+    fn list_images_full_name(&self) -> Vec<String> {
+        self.list_images()
+            .into_iter()
+            .map(|(_, image)| image.full_name())
+            .collect()
+    }
+}
+
 pub struct Server {
     config: Arc<ServerConfig>,
+    state: Arc<Mutex<ServerState>>,
 }
 
 impl Server {

@@ -1,8 +1,8 @@
-use std::{cell::UnsafeCell, collections::HashMap, ops::Deref, ptr::addr_of_mut};
+use std::{cell::UnsafeCell, collections::HashMap, fmt::Debug, ops::Deref, ptr::addr_of_mut};
 
 use crate::{
     container_of, list_for_each_entry,
-    utils::{alloc::malloc, linked_list::ListHead, Transmute},
+    utils::{alloc::malloc, linked_list::ListHead, IoResult, Transmute},
 };
 use async_trait::async_trait;
 use libc::{pthread_mutex_lock, pthread_mutex_unlock};
@@ -47,11 +47,33 @@ pub struct Driver {
     driver_impl: Box<dyn DriverImpl>,
 }
 
+impl std::hash::Hash for Driver {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name().hash(state);
+    }
+}
+
+impl PartialEq for Driver {
+    fn eq(&self, other: &Self) -> bool {
+        self.name() == other.name()
+    }
+}
+
+impl Eq for Driver {}
+
 impl Clone for Driver {
     fn clone(&self) -> Self {
         Driver {
             driver_impl: self.driver_impl.dup(),
         }
+    }
+}
+
+impl Debug for Driver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Driver")
+            .field("name", &self.name())
+            .finish()
     }
 }
 
@@ -73,14 +95,28 @@ pub trait DriverImpl: Send + Sync {
     fn name(&self) -> &str;
     fn dup(&self) -> Box<dyn DriverImpl>;
 
-    async fn open(&self, name: &str) -> std::io::Result<BlockDevice>;
+    async fn get_image(&self, name: &str) -> IoResult<ImageDesc>;
+    async fn open(&self, image: &ImageDesc) -> IoResult<Image>;
 }
 
-pub struct BlockDevice {
-    blkdev_impl: Box<dyn BlockDeviceImpl>,
+#[derive(Debug, Clone)]
+pub struct ImageDesc {
+    pub name: String,
+    pub driver_name: String,
+    pub config: HashMap<String, String>,
 }
 
-impl Clone for BlockDevice {
+impl ImageDesc {
+    pub fn full_name(&self) -> String {
+        format!("{}/{}", self.name, self.driver_name)
+    }
+}
+
+pub struct Image {
+    blkdev_impl: Box<dyn ImageImpl>,
+}
+
+impl Clone for Image {
     fn clone(&self) -> Self {
         Self {
             blkdev_impl: self.blkdev_impl.dup(),
@@ -88,16 +124,23 @@ impl Clone for BlockDevice {
     }
 }
 
-impl Deref for BlockDevice {
-    type Target = dyn BlockDeviceImpl;
+impl Deref for Image {
+    type Target = dyn ImageImpl;
     fn deref(&self) -> &Self::Target {
         self.blkdev_impl.as_ref()
     }
 }
 
+impl Debug for Image {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Image").field("name", &self.name()).finish()
+    }
+}
+
 #[async_trait]
-pub trait BlockDeviceImpl: Send + Sync {
-    fn dup(&self) -> Box<dyn BlockDeviceImpl>;
+pub trait ImageImpl: Send + Sync {
+    fn name(&self) -> &str;
+    fn dup(&self) -> Box<dyn ImageImpl>;
 }
 
 pub struct FsDriver {}

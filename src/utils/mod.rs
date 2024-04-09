@@ -1,6 +1,8 @@
 pub mod alloc;
 pub mod linked_list;
 
+pub type IoResult<T> = std::io::Result<T>;
+
 pub trait Transmute<T> {
     unsafe fn transmute(self) -> T;
 }
