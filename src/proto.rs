@@ -50,7 +50,7 @@ bitflags::bitflags! {
 // Option types:
 // https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md#option-types
 #[repr(u32)]
-#[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromPrimitive, ToPrimitive)]
 pub enum NbdOpt {
     ExportName = 1,
     Abort = 2,
