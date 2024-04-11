@@ -1,4 +1,6 @@
-use std::{cell::UnsafeCell, collections::HashMap, fmt::Debug, ops::Deref, ptr::addr_of_mut};
+use std::{
+    cell::UnsafeCell, collections::HashMap, fmt::Debug, ops::Deref, ptr::addr_of_mut, str::FromStr,
+};
 
 use crate::{
     container_of, list_for_each_entry,
@@ -99,16 +101,33 @@ pub trait DriverImpl: Send + Sync {
     async fn open(&self, image: &ImageDesc) -> IoResult<Image>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageDesc {
-    pub name: String,
     pub driver_name: String,
-    pub config: HashMap<String, String>,
+    pub name: String,
 }
 
 impl ImageDesc {
     pub fn full_name(&self) -> String {
         format!("{}/{}", self.name, self.driver_name)
+    }
+}
+
+impl FromStr for ImageDesc {
+    type Err = std::io::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some((drv, image)) = s.split_once('/') {
+            if drv.is_empty() || image.is_empty() {
+                Err(std::io::ErrorKind::InvalidData.into())
+            } else {
+                Ok(ImageDesc {
+                    driver_name: drv.to_string(),
+                    name: image.to_string(),
+                })
+            }
+        } else {
+            Err(std::io::ErrorKind::InvalidData.into())
+        }
     }
 }
 
@@ -137,9 +156,16 @@ impl Debug for Image {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ImageInfo {
+    pub size: usize,
+    pub readonly: bool,
+}
+
 #[async_trait]
 pub trait ImageImpl: Send + Sync {
     fn name(&self) -> &str;
+    fn info(&self) -> ImageInfo;
     fn dup(&self) -> Box<dyn ImageImpl>;
 }
 

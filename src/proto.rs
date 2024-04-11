@@ -30,7 +30,7 @@ bitflags::bitflags! {
     // Transmission flags:
     // https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md#transmission-flags
     #[derive(Debug, Clone, Copy)]
-    pub struct NbdTransFlag: u16 {
+    pub struct NbdTxFlag: u16 {
         const HAS_FLAGS         = 0x0001;
         const READ_ONLY         = 0x0002;
         const SEND_FLUSH        = 0x0004;

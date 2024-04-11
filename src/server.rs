@@ -3,8 +3,10 @@
 use std::{
     collections::HashMap,
     io::ErrorKind,
+    mem::MaybeUninit,
     net::Ipv4Addr,
     ops::Deref,
+    str::FromStr,
     sync::{Arc, Mutex},
 };
 
@@ -18,17 +20,24 @@ use tokio::{
 use tracing::{debug, error, info};
 
 use crate::{
-    driver::{Driver, ImageDesc},
+    driver::{Driver, Image, ImageDesc},
     proto::{
-        self, NbdClientFlag, NbdCmd, NbdHandshakeFlag, NbdOpt, NbdOptReply, IHAVEOPT, INIT_PASSWD,
-        NBD_REQUEST_MAGIC,
+        self, NbdClientFlag, NbdCmd, NbdHandshakeFlag, NbdOpt, NbdOptReply, NbdTxFlag, IHAVEOPT,
+        INIT_PASSWD, NBD_REQUEST_MAGIC,
     },
 };
 
+pub type IoError = std::io::Error;
+pub type IoErrorKind = std::io::ErrorKind;
 pub type IoResult<T> = std::io::Result<T>;
 
 // TODO
 const MAX_OPTION_DATA_LEN: usize = 4096;
+const DEFAULT_TX_FLAGS: NbdTxFlag = NbdTxFlag::HAS_FLAGS
+    .union(NbdTxFlag::SEND_FLUSH)
+    .union(NbdTxFlag::SEND_TRIM)
+    .union(NbdTxFlag::SEND_WRITE_ZEROES);
+const ZEROS: [u8; 128] = unsafe { MaybeUninit::zeroed().assume_init() };
 
 trait NbdWrite {
     async fn nbd_write(&self, sock: &mut TcpStream) -> IoResult<()>;
@@ -87,8 +96,17 @@ impl ServerConfig {
     }
 
     fn setup_option_handlers(&mut self) {
-        self.option_handlers
-            .insert(NbdOpt::List, Box::new(ListOptionHandler::default()));
+        self.insert_handler(
+            NbdOpt::ExportName,
+            Box::new(ExportNameOptionHandler::default()),
+        )
+        .insert_handler(NbdOpt::Abort, Box::new(AbortOptionHandler::default()))
+        .insert_handler(NbdOpt::List, Box::new(ListOptionHandler::default()));
+    }
+
+    fn insert_handler(&mut self, opt: NbdOpt, handler: Box<dyn OptionHandler>) -> &mut Self {
+        self.option_handlers.insert(opt, handler);
+        self
     }
 
     async fn handle_option(
@@ -128,6 +146,13 @@ impl ServerState {
             .map(|(_, image)| image.full_name())
             .collect()
     }
+
+    fn find_image(&self, name: &str) -> Option<(Driver, ImageDesc)> {
+        let desc = ImageDesc::from_str(name).ok()?;
+        self.list_images()
+            .into_iter()
+            .find(|(_drv, _desc)| &desc == _desc)
+    }
 }
 
 pub struct Server {
@@ -145,6 +170,9 @@ impl Server {
             let shard = ServerShard {
                 config: self.config.clone(),
                 state: self.state.clone(),
+                image: None,
+                tx_flags: DEFAULT_TX_FLAGS,
+                client_flags: NbdClientFlag::empty(),
             };
             tokio::spawn(shard.handle_connection(sock));
         }
@@ -154,6 +182,9 @@ impl Server {
 struct ServerShard {
     config: Arc<ServerConfig>,
     state: Arc<Mutex<ServerState>>,
+    image: Option<Image>,
+    tx_flags: NbdTxFlag,
+    client_flags: NbdClientFlag,
 }
 
 impl ServerShard {
@@ -170,6 +201,7 @@ impl ServerShard {
             error!("client do not support fixed newstyle negotiation");
             return Err(std::io::ErrorKind::InvalidData.into());
         }
+        self.client_flags = client_flags;
         let config = self.config.clone();
 
         // Handle options.
@@ -298,6 +330,23 @@ impl NbdWrite for OptReply {
     }
 }
 
+struct ExportNameOptReply {
+    size: u64,
+    tx_flags: NbdTxFlag,
+    no_zeros: bool,
+}
+
+impl NbdWrite for ExportNameOptReply {
+    async fn nbd_write(&self, sock: &mut TcpStream) -> IoResult<()> {
+        sock.write_u64(self.size).await?;
+        sock.write_u16(self.tx_flags.bits()).await?;
+        if !self.no_zeros {
+            sock.write_all(&ZEROS[..124]).await?;
+        }
+        Ok(())
+    }
+}
+
 enum OptionHandleState {
     Continue,
     End,
@@ -337,6 +386,67 @@ impl OptionHandler for UnknownOptionHandler {
     }
 }
 
+// NBD_OPT_EXPORT_NAME (1)
+#[derive(Debug, Default)]
+struct ExportNameOptionHandler {}
+
+#[async_trait]
+impl OptionHandler for ExportNameOptionHandler {
+    async fn handle_option(
+        &self,
+        server_shard: &mut ServerShard,
+        _opt: NbdOpt,
+        data: Vec<u8>,
+        sock: &mut TcpStream,
+    ) -> IoResult<OptionHandleState> {
+        let image_name = String::from_utf8(data)
+            .map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err))?;
+        let (drv, desc) = server_shard
+            .state
+            .lock()
+            .unwrap()
+            .find_image(&image_name)
+            .ok_or(IoError::from(IoErrorKind::InvalidData))?;
+        let image = drv.open(&desc).await?;
+        let info = image.info();
+        info!(?desc, ?info, "open image");
+        server_shard.image = Some(image);
+
+        let reply = ExportNameOptReply {
+            size: info.size as u64,
+            tx_flags: server_shard.tx_flags,
+            no_zeros: server_shard.client_flags.contains(NbdClientFlag::NO_ZEROES),
+        };
+        reply.nbd_write(sock).await?;
+
+        Ok(OptionHandleState::End)
+    }
+}
+
+// NBD_OPT_ABORT (2)
+#[derive(Debug, Default)]
+struct AbortOptionHandler {}
+
+#[async_trait]
+impl OptionHandler for AbortOptionHandler {
+    async fn handle_option(
+        &self,
+        _server_shard: &mut ServerShard,
+        opt: NbdOpt,
+        _data: Vec<u8>,
+        sock: &mut TcpStream,
+    ) -> IoResult<OptionHandleState> {
+        let reply = OptReply {
+            option: opt,
+            reply: NbdOptReply::Ack,
+            data: Vec::new(),
+        };
+        reply.nbd_write(sock).await?;
+        Ok(OptionHandleState::Abort)
+    }
+}
+
+// NBD_OPT_LIST (3)
 #[derive(Debug, Default)]
 struct ListOptionHandler {}
 
